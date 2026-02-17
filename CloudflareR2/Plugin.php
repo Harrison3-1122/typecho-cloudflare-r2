@@ -60,6 +60,9 @@ class Plugin implements PluginInterface
 
         $domain = new Text('domain', NULL, NULL, _t('公开访问域名'), _t('示例：https://img.example.com，在”存储桶-设置-自定义域“设置。'));
         $form->addInput($domain);
+
+        $savePath = new Text('save_path', NULL, '', _t('自定义存储路径'), _t('可选，示例：typecho/{Y}/{m}。支持日期占位符：{Y}年、{m}月、{d}日。'));
+        $form->addInput($savePath);
     }
 
     /**
@@ -88,6 +91,7 @@ class Plugin implements PluginInterface
             'secret_access_key' => $opts->secret_access_key,
             'endpoint' => $opts->endpoint,
             'domain' => $opts->domain,
+            'save_path' => $opts->save_path,
         ];
     }
 
@@ -141,7 +145,8 @@ class Plugin implements PluginInterface
 
         // 使用md5-16存储文件名
         $tmp_file = $file['file'] ?? $file['tmp_name'];
-        $file_path = substr(md5_file($tmp_file), 8, 16) .'_'. $file['name'];
+        $filename = substr(md5_file($tmp_file), 8, 16) .'_'. $file['name'];
+        $file_path = self::buildStoragePath($filename, $config['save_path'] ?? '');
         $content_type = $file['type'];
 
         // todo 检查远程文件存在
@@ -225,6 +230,44 @@ class Plugin implements PluginInterface
     {
         // todo 调用api删除远程文件
         return true;
+    }
+
+
+    /**
+     * 构建远程存储路径
+     *
+     * @param string $filename
+     * @param string $savePath
+     * @return string
+     */
+    private static function buildStoragePath(string $filename, string $savePath = ''): string
+    {
+        if (empty($savePath)) {
+            return $filename;
+        }
+
+        $path = strtr($savePath, [
+            '{Y}' => date('Y'),
+            '{m}' => date('m'),
+            '{d}' => date('d'),
+        ]);
+
+        $parts = array_filter(explode('/', str_replace('\\', '/', $path)));
+        $cleanParts = [];
+        foreach ($parts as $part) {
+            $part = trim($part);
+            if ($part === '' || $part === '.' || $part === '..') {
+                continue;
+            }
+
+            $cleanParts[] = trim($part, ' \t\n\r\0\x0B/');
+        }
+
+        if (empty($cleanParts)) {
+            return $filename;
+        }
+
+        return implode('/', $cleanParts) . '/' . $filename;
     }
 
     /**
