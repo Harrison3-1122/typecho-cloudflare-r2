@@ -60,6 +60,9 @@ class Plugin implements PluginInterface
 
         $domain = new Text('domain', NULL, NULL, _t('公开访问域名'), _t('示例：https://img.example.com，在”存储桶-设置-自定义域“设置。'));
         $form->addInput($domain);
+
+        $savePath = new Text('save_path', NULL, '', _t('自定义存储路径'), _t('可选，示例：typecho/{Y}/{m}。支持日期占位符：{Y}年、{m}月、{d}日。'));
+        $form->addInput($savePath);
     }
 
     /**
@@ -88,6 +91,7 @@ class Plugin implements PluginInterface
             'secret_access_key' => $opts->secret_access_key,
             'endpoint' => $opts->endpoint,
             'domain' => $opts->domain,
+            'save_path' => $opts->save_path,
         ];
     }
 
@@ -141,7 +145,8 @@ class Plugin implements PluginInterface
 
         // 使用md5-16存储文件名
         $tmp_file = $file['file'] ?? $file['tmp_name'];
-        $file_path = substr(md5_file($tmp_file), 8, 16) .'_'. $file['name'];
+        $filename = substr(md5_file($tmp_file), 8, 16) .'_'. $file['name'];
+        $file_path = self::buildStoragePath($filename, $config['save_path'] ?? '');
         $content_type = $file['type'];
 
         // todo 检查远程文件存在
@@ -191,7 +196,7 @@ class Plugin implements PluginInterface
 
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         if ($http_code != 200) {
-            new Exception('upload_failed, Failed to upload file to R2. HTTP Code: ' . $http_code);
+            throw new Exception('upload_failed, Failed to upload file to R2. HTTP Code: ' . $http_code);
         }
 
         return [
@@ -227,6 +232,44 @@ class Plugin implements PluginInterface
         return true;
     }
 
+
+    /**
+     * 构建远程存储路径
+     *
+     * @param string $filename
+     * @param string $savePath
+     * @return string
+     */
+    private static function buildStoragePath(string $filename, string $savePath = ''): string
+    {
+        if (empty($savePath)) {
+            return $filename;
+        }
+
+        $path = strtr($savePath, [
+            '{Y}' => date('Y'),
+            '{m}' => date('m'),
+            '{d}' => date('d'),
+        ]);
+
+        $parts = array_filter(explode('/', str_replace('\\', '/', $path)));
+        $cleanParts = [];
+        foreach ($parts as $part) {
+            $part = trim($part);
+            if ($part === '' || $part === '.' || $part === '..') {
+                continue;
+            }
+
+            $cleanParts[] = trim($part, ' \t\n\r\0\x0B/');
+        }
+
+        if (empty($cleanParts)) {
+            return $filename;
+        }
+
+        return implode('/', $cleanParts) . '/' . $filename;
+    }
+
     /**
      * 获取文件访问路径
      *
@@ -235,17 +278,23 @@ class Plugin implements PluginInterface
      */
     public static function attachmentHandle($content): string
     {
+        $path = self::getAttachmentPath($content);
+
+        if (empty($path)) {
+            return '';
+        }
+
         // 以前上传的本地文件
         $root = defined('__TYPECHO_UPLOAD_ROOT_DIR__') ? __TYPECHO_UPLOAD_ROOT_DIR__ : __TYPECHO_ROOT_DIR__ ;
-        if (file_exists($root . $content['attachment']->path)) {
+        if (file_exists($root . $path)) {
             $options = Options::alloc();
             $prefix = defined('__TYPECHO_UPLOAD_URL__') ? __TYPECHO_UPLOAD_URL__ : $options->siteUrl;
-            return Common::url($content['attachment']->path, $prefix);
+            return Common::url($path, $prefix);
         }
 
         // 远程文件
         $config = self::r2config();
-        return $config['domain'] . $content['attachment']->path;
+        return rtrim($config['domain'], '/') . '/' . ltrim($path, '/');
     }
 
     /**
@@ -256,6 +305,38 @@ class Plugin implements PluginInterface
     public static function attachmentDataHandle(array $content): string
     {
         // todo 下载远程文件
+        return '';
+    }
+
+    /**
+     * 获取附件路径（兼容 Typecho 1.2.x / 1.3.x 不同结构）
+     *
+     * @param mixed $content
+     * @return string
+     */
+    private static function getAttachmentPath($content): string
+    {
+        if (is_array($content)) {
+            if (isset($content['attachment'])) {
+                $attachment = $content['attachment'];
+                if (is_array($attachment) && isset($attachment['path'])) {
+                    return (string)$attachment['path'];
+                }
+
+                if (is_object($attachment) && isset($attachment->path)) {
+                    return (string)$attachment->path;
+                }
+            }
+
+            if (isset($content['path'])) {
+                return (string)$content['path'];
+            }
+        }
+
+        if (is_object($content) && isset($content->path)) {
+            return (string)$content->path;
+        }
+
         return '';
     }
 }
