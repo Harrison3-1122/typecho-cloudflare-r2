@@ -191,7 +191,7 @@ class Plugin implements PluginInterface
 
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         if ($http_code != 200) {
-            new Exception('upload_failed, Failed to upload file to R2. HTTP Code: ' . $http_code);
+            throw new Exception('upload_failed, Failed to upload file to R2. HTTP Code: ' . $http_code);
         }
 
         return [
@@ -235,17 +235,23 @@ class Plugin implements PluginInterface
      */
     public static function attachmentHandle($content): string
     {
+        $path = self::getAttachmentPath($content);
+
+        if (empty($path)) {
+            return '';
+        }
+
         // 以前上传的本地文件
         $root = defined('__TYPECHO_UPLOAD_ROOT_DIR__') ? __TYPECHO_UPLOAD_ROOT_DIR__ : __TYPECHO_ROOT_DIR__ ;
-        if (file_exists($root . $content['attachment']->path)) {
+        if (file_exists($root . $path)) {
             $options = Options::alloc();
             $prefix = defined('__TYPECHO_UPLOAD_URL__') ? __TYPECHO_UPLOAD_URL__ : $options->siteUrl;
-            return Common::url($content['attachment']->path, $prefix);
+            return Common::url($path, $prefix);
         }
 
         // 远程文件
         $config = self::r2config();
-        return $config['domain'] . $content['attachment']->path;
+        return rtrim($config['domain'], '/') . '/' . ltrim($path, '/');
     }
 
     /**
@@ -256,6 +262,38 @@ class Plugin implements PluginInterface
     public static function attachmentDataHandle(array $content): string
     {
         // todo 下载远程文件
+        return '';
+    }
+
+    /**
+     * 获取附件路径（兼容 Typecho 1.2.x / 1.3.x 不同结构）
+     *
+     * @param mixed $content
+     * @return string
+     */
+    private static function getAttachmentPath($content): string
+    {
+        if (is_array($content)) {
+            if (isset($content['attachment'])) {
+                $attachment = $content['attachment'];
+                if (is_array($attachment) && isset($attachment['path'])) {
+                    return (string)$attachment['path'];
+                }
+
+                if (is_object($attachment) && isset($attachment->path)) {
+                    return (string)$attachment->path;
+                }
+            }
+
+            if (isset($content['path'])) {
+                return (string)$content['path'];
+            }
+        }
+
+        if (is_object($content) && isset($content->path)) {
+            return (string)$content->path;
+        }
+
         return '';
     }
 }
